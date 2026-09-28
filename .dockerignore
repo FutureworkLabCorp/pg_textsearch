@@ -1,0 +1,7 @@
+.git
+*.o
+*.so
+*.bc
+test/results
+test/regression.*
+tmp_check*

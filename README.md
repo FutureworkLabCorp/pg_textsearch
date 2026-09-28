@@ -19,6 +19,22 @@ pg_textsearch supports PostgreSQL 17 and 18. PostgreSQL 19 (beta) is
 supported on a best-effort basis while it is in beta; its CI is allowed
 to fail and prebuilt binaries are not published for it yet.
 
+This branch also builds and runs on PostgreSQL 15 and 16, from source
+only (`src/compat.h` maps the newer APIs onto the older ones). The
+differences there follow from what those servers provide:
+
+- There is no MAINTAIN privilege or `pg_maintain` role before 17, so the
+  maintenance operations the extension checks require table ownership,
+  which is what the server itself requires for them.
+- Injection points do not exist before 17, so the injection-point tests
+  cannot run.
+- The index dump and summary functions omit the DSA size, which cannot
+  be read before 17.
+
+`docker/Dockerfile.pgvector` builds the `pgvector/pgvector` image with
+pg_textsearch added; `--build-arg PG_MAJOR=` picks the server version
+(15 by default).
+
 ## Installation
 
 pg_textsearch supports PostgreSQL 17 and 18.

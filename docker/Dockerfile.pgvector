@@ -1,0 +1,25 @@
+# pgvector's PostgreSQL image with pg_textsearch added.
+#
+#   docker build -f docker/Dockerfile.pgvector -t pgvector-textsearch:pg15 .
+#   docker build -f docker/Dockerfile.pgvector --build-arg PG_MAJOR=17 \
+#       -t pgvector-textsearch:pg17 .
+#
+# pg_textsearch must be in shared_preload_libraries.  The default command
+# below sets it; a compose file that overrides `command:` has to pass
+# "-c shared_preload_libraries=pg_textsearch" itself (and add any other
+# preloaded libraries to the same list).
+ARG PG_MAJOR=15
+
+FROM pgvector/pgvector:pg${PG_MAJOR} AS build
+ARG PG_MAJOR
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential postgresql-server-dev-${PG_MAJOR} \
+    && rm -rf /var/lib/apt/lists/*
+COPY . /src
+WORKDIR /src
+RUN make clean && make -j"$(nproc)" && make install DESTDIR=/out
+
+FROM pgvector/pgvector:pg${PG_MAJOR}
+COPY --from=build /out/ /
+CMD ["postgres", "-c", "shared_preload_libraries=pg_textsearch"]
