@@ -20,6 +20,9 @@
 #include <nodes/makefuncs.h>
 #include <nodes/value.h>
 #include <optimizer/optimizer.h>
+#if PG_VERSION_NUM < 170000
+#include <optimizer/planner.h>
+#endif
 #include <storage/bufmgr.h>
 #include <storage/lmgr.h>
 #include <storage/lock.h>
@@ -1550,6 +1553,17 @@ tp_build(Relation heap, Relation index, IndexInfo *indexInfo)
 	{
 		int	   nworkers	 = indexInfo->ii_ParallelWorkers;
 		double reltuples = heap->rd_rel->reltuples;
+
+#if PG_VERSION_NUM < 170000
+		/*
+		 * Before PG17, index_build() plans workers only for btree (PG17
+		 * asks the AM's amcanbuildparallel instead), so ii_ParallelWorkers
+		 * is always 0 here.  Plan them as PG17's index_build() would.
+		 */
+		if (nworkers == 0 && IsNormalProcessingMode())
+			nworkers = plan_create_index_workers(
+					RelationGetRelid(heap), RelationGetRelid(index));
+#endif
 
 		/*
 		 * Only consider parallel build for tables with 100K+ estimated rows.
