@@ -1717,6 +1717,174 @@ fix_bm25_indexpaths(
 	}
 }
 
+#if PG_VERSION_NUM < 170000
+/*
+ * Ordered BM25 index paths for a prefix of the query's ORDER BY.
+ *
+ * PG17 (commit 625d5b3ca0) lets an amcanorderbyop index serve a leading
+ * subset of the query pathkeys, so a query such as
+ *
+ *     ORDER BY content <@> to_bm25query('...'), id LIMIT 10
+ *
+ * runs as an ordered BM25 index scan under an Incremental Sort on "id".
+ * PG15 and PG16 build an ordered path only when the index satisfies
+ * every pathkey, so that query falls back to a sequential scan that
+ * scores every row.  The functions below add the PG17 prefix path for
+ * BM25 indexes; the upper planner then adds the Incremental Sort.  Other
+ * access methods (GiST, pgvector) are left to the core planner.
+ *
+ * tp_match_clause_to_ordering_op() is PG15's static
+ * match_clause_to_ordering_op() from optimizer/path/indxpath.c.
+ */
+#define TP_INDEX_COLL_MATCHES_EXPR_COLL(idxcollation, exprcollation) \
+	((idxcollation) == InvalidOid || (idxcollation) == (exprcollation))
+
+static Expr *
+tp_match_clause_to_ordering_op(
+		IndexOptInfo *index, int indexcol, Expr *clause, Oid pk_opfamily)
+{
+	Oid	  opfamily	   = index->opfamily[indexcol];
+	Oid	  idxcollation = index->indexcollations[indexcol];
+	Node *leftop;
+	Node *rightop;
+	Oid	  expr_op;
+	Oid	  expr_coll;
+	Oid	  sortfamily;
+	bool  commuted = false;
+
+	if (!is_opclause(clause))
+		return NULL;
+	leftop	= get_leftop(clause);
+	rightop = get_rightop(clause);
+	if (!leftop || !rightop)
+		return NULL;
+	expr_op	  = ((OpExpr *)clause)->opno;
+	expr_coll = ((OpExpr *)clause)->inputcollid;
+
+	if (!TP_INDEX_COLL_MATCHES_EXPR_COLL(idxcollation, expr_coll))
+		return NULL;
+
+	if (match_index_to_operand(leftop, indexcol, index) &&
+		!contain_var_clause(rightop) && !contain_volatile_functions(rightop))
+	{
+		/* the index key is on the left; nothing to do */
+	}
+	else if (
+			match_index_to_operand(rightop, indexcol, index) &&
+			!contain_var_clause(leftop) && !contain_volatile_functions(leftop))
+	{
+		expr_op = get_commutator(expr_op);
+		if (expr_op == InvalidOid)
+			return NULL;
+		commuted = true;
+	}
+	else
+		return NULL;
+
+	sortfamily = get_op_opfamily_sortfamily(expr_op, opfamily);
+	if (sortfamily != pk_opfamily)
+		return NULL;
+
+	if (commuted)
+	{
+		OpExpr *newclause = makeNode(OpExpr);
+
+		memcpy(newclause, clause, sizeof(OpExpr));
+		newclause->opno		= expr_op;
+		newclause->opfuncid = InvalidOid;
+		newclause->args		= list_make2(rightop, leftop);
+		clause				= (Expr *)newclause;
+	}
+
+	return clause;
+}
+
+/*
+ * Match the first query pathkey to a BM25 index column and, on success,
+ * add an index path ordered by that pathkey alone.
+ */
+static void
+tp_add_prefix_ordered_bm25_path(
+		PlannerInfo *root, RelOptInfo *rel, IndexOptInfo *index)
+{
+	PathKey	 *pathkey = linitial_node(PathKey, root->query_pathkeys);
+	ListCell *lc;
+
+	if (pathkey->pk_strategy != BTLessStrategyNumber ||
+		pathkey->pk_nulls_first || pathkey->pk_eclass->ec_has_volatile)
+		return;
+
+	foreach (lc, pathkey->pk_eclass->ec_members)
+	{
+		EquivalenceMember *member = (EquivalenceMember *)lfirst(lc);
+
+		if (!bms_equal(member->em_relids, rel->relids))
+			continue;
+
+		for (int indexcol = 0; indexcol < index->nkeycolumns; indexcol++)
+		{
+			Expr	  *orderby;
+			IndexPath *path;
+
+			orderby = tp_match_clause_to_ordering_op(
+					index, indexcol, member->em_expr, pathkey->pk_opfamily);
+			if (orderby == NULL)
+				continue;
+
+			path = create_index_path(
+					root,
+					index,
+					NIL,
+					list_make1(orderby),
+					list_make1_int(indexcol),
+					list_make1(pathkey),
+					ForwardScanDirection,
+					false,
+					NULL,
+					1.0,
+					false);
+			add_path(rel, (Path *)path);
+			return;
+		}
+	}
+}
+
+static void
+tp_add_prefix_ordered_bm25_paths(PlannerInfo *root, RelOptInfo *rel)
+{
+	Oid		  bm25_am_oid = InvalidOid;
+	ListCell *lc;
+
+	/* One pathkey is matched by the core planner already. */
+	if (list_length(root->query_pathkeys) < 2)
+		return;
+	if (rel->reloptkind != RELOPT_BASEREL &&
+		rel->reloptkind != RELOPT_OTHER_MEMBER_REL)
+		return;
+
+	foreach (lc, rel->indexlist)
+	{
+		IndexOptInfo *index = (IndexOptInfo *)lfirst(lc);
+
+		if (!index->amcanorderbyop)
+			continue;
+		if (!OidIsValid(bm25_am_oid))
+		{
+			bm25_am_oid = get_am_oid("bm25", true);
+			if (!OidIsValid(bm25_am_oid))
+				return;
+		}
+		if (index->relam != bm25_am_oid)
+			continue;
+		/* Same test as create_index_paths(): skip unusable partial indexes. */
+		if (index->indpred != NIL && !index->predOK)
+			continue;
+
+		tp_add_prefix_ordered_bm25_path(root, rel, index);
+	}
+}
+#endif
+
 /*
  * set_rel_pathlist_hook: Replace BM25 IndexPaths that use the wrong index.
  *
@@ -1738,6 +1906,10 @@ tp_set_rel_pathlist_hook(
 {
 	if (prev_set_rel_pathlist_hook)
 		prev_set_rel_pathlist_hook(root, rel, rti, rte);
+
+#if PG_VERSION_NUM < 170000
+	tp_add_prefix_ordered_bm25_paths(root, rel);
+#endif
 
 	/* Only process base relations */
 	if (rel->reloptkind != RELOPT_BASEREL)
