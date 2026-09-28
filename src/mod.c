@@ -189,6 +189,9 @@ typedef struct TpProcessUtilityContext
 	Oid								rls_ddl_lock_object;
 	List						   *altered_relids;
 	List						   *hierarchy_relids;
+#if PG_VERSION_NUM < 170000
+	List *row_security_relids; /* see tp_row_security_relids() */
+#endif
 } TpProcessUtilityContext;
 
 static TpProcessUtilityContext *current_utility_context = NULL;
@@ -4232,6 +4235,94 @@ relation_exists(Oid relid)
 	return exists;
 }
 
+#if PG_VERSION_NUM < 170000
+/*
+ * Relations with row-level security enabled, as seen by the current
+ * command.
+ *
+ * PG17 fires OAT_POST_ALTER on pg_class when ALTER TABLE ... ENABLE ROW
+ * LEVEL SECURITY sets relrowsecurity, and that event is what fills
+ * altered_relids.  PG15 and PG16 fire nothing there, so the relations a
+ * command enabled are recovered by comparing this set before and after
+ * it.  The comparison is by OID on purpose: looking the statement's
+ * name up again after the command would let a ddl_command_start event
+ * trigger swap names and aim the check at the wrong relation.
+ *
+ * The list lives in TopMemoryContext because a nested utility command
+ * appends to its parent's copy (see tp_collect_row_security_enabled).
+ */
+static List *
+tp_row_security_relids(void)
+{
+	Relation	class_rel;
+	SysScanDesc scan;
+	HeapTuple	tuple;
+	List	   *relids = NIL;
+
+	class_rel = table_open(RelationRelationId, AccessShareLock);
+	scan	  = systable_beginscan(
+			 class_rel, InvalidOid, false, SnapshotSelf, 0, NULL);
+	while ((tuple = systable_getnext(scan)) != NULL)
+	{
+		Form_pg_class class_form = (Form_pg_class)GETSTRUCT(tuple);
+
+		if (class_form->relrowsecurity)
+		{
+			MemoryContext old_context = MemoryContextSwitchTo(
+					TopMemoryContext);
+
+			relids = lappend_oid(relids, class_form->oid);
+			MemoryContextSwitchTo(old_context);
+		}
+	}
+	systable_endscan(scan);
+	table_close(class_rel, AccessShareLock);
+	return relids;
+}
+
+/*
+ * Add the relations whose row-level security the command enabled to
+ * altered_relids, as PG17's OAT_POST_ALTER event would have.
+ *
+ * PG17 delivers that event to the innermost utility command only, so a
+ * relation enabled by a nested command (say, one an event trigger runs)
+ * is checked under the nested command's policy and not again under the
+ * outer one.  To match, each relation found here is also added to the
+ * enclosing command's before-set, which then does not count it.
+ */
+static void
+tp_collect_row_security_enabled(TpProcessUtilityContext *utility_context)
+{
+	TpProcessUtilityContext *parent = utility_context->previous;
+	List					*after	= tp_row_security_relids();
+	ListCell				*lc;
+
+	foreach (lc, after)
+	{
+		Oid relid = lfirst_oid(lc);
+
+		if (list_member_oid(utility_context->row_security_relids, relid))
+			continue;
+		if (!list_member_oid(utility_context->altered_relids, relid))
+		{
+			utility_context->altered_relids =
+					lappend_oid(utility_context->altered_relids, relid);
+			utility_context->retain_rls_ddl_lock = true;
+		}
+		if (parent != NULL && parent->check_rls_enable)
+		{
+			MemoryContext old_context = MemoryContextSwitchTo(
+					TopMemoryContext);
+
+			parent->row_security_relids =
+					lappend_oid(parent->row_security_relids, relid);
+			MemoryContextSwitchTo(old_context);
+		}
+	}
+	list_free(after);
+}
+#endif
+
 static void
 validate_utility_context(TpProcessUtilityContext *utility_context)
 {
@@ -5069,6 +5160,11 @@ tp_process_utility(
 					&utility_context->rls_ddl_lock_object);
 		}
 
+#if PG_VERSION_NUM < 170000
+		if (utility_context->check_rls_enable)
+			utility_context->row_security_relids = tp_row_security_relids();
+#endif
+
 		call_next_process_utility(
 				pstmt,
 				queryString,
@@ -5079,6 +5175,10 @@ tp_process_utility(
 				dest,
 				qc);
 
+#if PG_VERSION_NUM < 170000
+		if (utility_context->check_rls_enable)
+			tp_collect_row_security_enabled(utility_context);
+#endif
 		validate_utility_context(utility_context);
 
 		if (utility_context->build_progress_started)
@@ -5099,6 +5199,9 @@ tp_process_utility(
 		current_utility_context = utility_context->previous;
 		list_free(utility_context->altered_relids);
 		list_free(utility_context->hierarchy_relids);
+#if PG_VERSION_NUM < 170000
+		list_free(utility_context->row_security_relids);
+#endif
 		pfree(utility_context);
 	}
 	PG_CATCH();
@@ -5117,6 +5220,9 @@ tp_process_utility(
 					false);
 			utility_context->rls_ddl_lock_acquired = false;
 		}
+#if PG_VERSION_NUM < 170000
+		list_free(utility_context->row_security_relids);
+#endif
 		pfree(utility_context);
 		PG_RE_THROW();
 	}
