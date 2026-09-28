@@ -22,6 +22,7 @@
 #include <utils/memutils.h>
 
 #include "access/am.h"
+#include "compat.h"
 #include "index/metapage.h"
 #include "index/registry.h"
 #include "segment/io.h"
@@ -168,8 +169,8 @@ get_registry_params(dshash_parameters *params)
 	params->entry_size		 = sizeof(TpRegistryEntry);
 	params->compare_function = registry_compare_fn;
 	params->hash_function	 = registry_hash_fn;
-	params->copy_function	 = registry_copy_fn;
-	params->tranche_id		 = tp_tranche_id(TP_REGISTRY_HASH_TRANCHE_ID);
+	TP_DSHASH_SET_COPY_FUNCTION(*params, registry_copy_fn);
+	params->tranche_id = tp_tranche_id(TP_REGISTRY_HASH_TRANCHE_ID);
 }
 
 /*

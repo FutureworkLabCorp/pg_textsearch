@@ -17,7 +17,10 @@
 #include <utils/memutils.h>
 
 #include "common/hashfn.h"
+#if PG_VERSION_NUM >= 170000
 #include "common/hashfn_unstable.h"
+#endif
+#include "compat.h"
 #include "index/state.h"
 #include "memtable/posting.h"
 #include "memtable/stringtable.h"
@@ -131,8 +134,8 @@ tp_string_table_create(dsa_area *area)
 	params.entry_size		= sizeof(TpStringHashEntry);
 	params.hash_function	= tp_string_hash_function;
 	params.compare_function = tp_string_compare_function;
-	params.copy_function	= tp_string_copy_function;
-	params.tranche_id		= tp_tranche_id(TP_STRING_HASH_TRANCHE_ID);
+	TP_DSHASH_SET_COPY_FUNCTION(params, tp_string_copy_function);
+	params.tranche_id = tp_tranche_id(TP_STRING_HASH_TRANCHE_ID);
 
 	/* Create the dshash table */
 	return dshash_create(area, &params, area);
@@ -153,8 +156,8 @@ tp_string_table_attach(dsa_area *area, dshash_table_handle handle)
 	params.entry_size		= sizeof(TpStringHashEntry);
 	params.hash_function	= tp_string_hash_function;
 	params.compare_function = tp_string_compare_function;
-	params.copy_function	= tp_string_copy_function;
-	params.tranche_id		= tp_tranche_id(TP_STRING_HASH_TRANCHE_ID);
+	TP_DSHASH_SET_COPY_FUNCTION(params, tp_string_copy_function);
+	params.tranche_id = tp_tranche_id(TP_STRING_HASH_TRANCHE_ID);
 
 	/* Attach to the dshash table */
 	return dshash_attach(area, &params, handle, area);

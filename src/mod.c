@@ -13,6 +13,7 @@
 #include <access/skey.h>
 #include <access/table.h>
 #include <access/xact.h>
+#include <catalog/catalog.h>
 #include <catalog/dependency.h>
 #include <catalog/heap.h>
 #include <catalog/index.h>
@@ -57,6 +58,7 @@
 
 #include "access/am.h"
 #include "access/rls.h"
+#include "compat.h"
 #include "constants.h"
 #include "index/compaction_job.h"
 #include "index/compaction_request.h"
@@ -1928,7 +1930,7 @@ tp_bulk_move_has_unauthorized_index(Oid tablespace_oid, List *owner_oids)
 static bool
 tp_can_maintain_relation(Oid relation_oid)
 {
-	return pg_class_aclcheck(relation_oid, GetUserId(), ACL_MAINTAIN) ==
+	return tp_class_maintain_aclcheck(relation_oid, GetUserId()) ==
 		   ACLCHECK_OK;
 }
 
@@ -2116,7 +2118,7 @@ tp_reindex_index_lookup_callback(
 	{
 		AclResult aclresult;
 
-		aclresult = pg_class_aclcheck(table_oid, GetUserId(), ACL_MAINTAIN);
+		aclresult = tp_class_maintain_aclcheck(table_oid, GetUserId());
 		if (aclresult != ACLCHECK_OK)
 			aclcheck_error(aclresult, OBJECT_INDEX, relation->relname);
 	}
@@ -2148,7 +2150,7 @@ tp_reindex_initial_indexes(
 
 		if (!object_ownercheck(
 					NamespaceRelationId, namespace_oid, GetUserId()) &&
-			!has_privs_of_role(GetUserId(), ROLE_PG_MAINTAIN))
+			!tp_has_pg_maintain(GetUserId()))
 		{
 			*tracks_commits = false;
 			return NIL;
@@ -2173,7 +2175,7 @@ tp_reindex_initial_indexes(
 		pfree(database_name);
 		if (!object_ownercheck(
 					DatabaseRelationId, MyDatabaseId, GetUserId()) &&
-			!has_privs_of_role(GetUserId(), ROLE_PG_MAINTAIN))
+			!tp_has_pg_maintain(GetUserId()))
 		{
 			*tracks_commits = false;
 			return NIL;
@@ -2218,7 +2220,7 @@ tp_reindex_initial_indexes(
 			 stmt->relation,
 			 relation_lockmode,
 			 0,
-			 RangeVarCallbackMaintainsTable,
+			 TP_RANGE_VAR_CALLBACK_MAINTAINS_TABLE,
 			 NULL);
 	relkind			= get_rel_relkind(relation_oid);
 	*tracks_commits = concurrently || relkind == RELKIND_PARTITIONED_TABLE;
@@ -3679,7 +3681,7 @@ tp_cluster_rewrite_indexes(
 			relation,
 			AccessExclusiveLock,
 			0,
-			RangeVarCallbackMaintainsTable,
+			TP_RANGE_VAR_CALLBACK_MAINTAINS_TABLE,
 			NULL);
 	*multi_transaction = get_rel_relkind(relation_oid) ==
 						 RELKIND_PARTITIONED_TABLE;
@@ -3720,7 +3722,9 @@ tp_alter_table_may_rewrite(AlterTableStmt *stmt)
 		{
 		case AT_AddColumn:
 		case AT_AlterColumnType:
+#if PG_VERSION_NUM >= 170000
 		case AT_SetExpression:
+#endif
 		case AT_SetLogged:
 		case AT_SetUnLogged:
 		case AT_SetAccessMethod:
@@ -3748,7 +3752,9 @@ tp_alter_table_rewrite_recurses(AlterTableStmt *stmt)
 		{
 		case AT_AddColumn:
 		case AT_AlterColumnType:
+#if PG_VERSION_NUM >= 170000
 		case AT_SetExpression:
+#endif
 			return true;
 		default:
 			break;
@@ -3975,7 +3981,11 @@ tp_refresh_matview_rewrite_indexes(RefreshMatViewStmt *stmt)
 	Oid		 relation_oid;
 
 	relation_oid = RangeVarGetRelidExtended(
-			stmt->relation, lockmode, 0, RangeVarCallbackMaintainsTable, NULL);
+			stmt->relation,
+			lockmode,
+			0,
+			TP_RANGE_VAR_CALLBACK_MAINTAINS_TABLE,
+			NULL);
 	return tp_relation_indexes_locked(relation_oid, NoLock);
 }
 

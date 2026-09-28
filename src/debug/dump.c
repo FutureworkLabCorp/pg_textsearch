@@ -271,6 +271,8 @@ tp_summarize_index_to_output(const char *index_name, DumpOutput *out)
 	}
 
 	/* Memory usage */
+	/* dsa_get_total_size() arrived in PG17. */
+#if PG_VERSION_NUM >= 170000
 	if (index_state->dsa)
 	{
 		size_t dsa_total_size = dsa_get_total_size(index_state->dsa);
@@ -281,6 +283,7 @@ tp_summarize_index_to_output(const char *index_name, DumpOutput *out)
 				dsa_total_size,
 				(double)dsa_total_size / (1024.0 * 1024.0));
 	}
+#endif
 
 	/* Count memtable documents from the on-disk page chain (v2). */
 	memtable_terms = 0;
@@ -543,6 +546,8 @@ tp_dump_index_to_output(const char *index_name, DumpOutput *out)
 	}
 
 	/* DSA memory */
+	/* dsa_get_total_size() arrived in PG17. */
+#if PG_VERSION_NUM >= 170000
 	if (index_state->dsa)
 	{
 		size_t dsa_total_size = dsa_get_total_size(index_state->dsa);
@@ -553,6 +558,7 @@ tp_dump_index_to_output(const char *index_name, DumpOutput *out)
 				dsa_total_size,
 				(double)dsa_total_size / (1024.0 * 1024.0));
 	}
+#endif
 
 	/* BM25 parameters */
 	dump_printf(out, "BM25 Parameters:\n");

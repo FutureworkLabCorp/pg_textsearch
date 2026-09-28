@@ -19,6 +19,7 @@
 #include <utils/syscache.h>
 
 #include "access/am.h"
+#include "compat.h"
 #include "constants.h"
 #include "index/compaction_request.h"
 #include "index/metapage.h"
@@ -231,6 +232,33 @@ tp_needs_compaction(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(available);
 }
 
+/*
+ * Run one compaction pass under the compaction lock.  Kept in its own
+ * function so tp_compact_index() does not nest PG_TRY blocks: a nested
+ * block needs PG16's named PG_TRY(name) to avoid shadowing the outer
+ * block's locals, and PG15 has no named form.
+ */
+static bool
+tp_compact_index_pass(TpLocalIndexState *index_state, Relation index_rel)
+{
+	volatile bool pass_ran = false;
+
+	tp_compaction_lock(index_rel);
+	PG_TRY();
+	{
+		pass_ran = tp_compact_step(index_state, index_rel);
+	}
+	PG_FINALLY();
+	{
+		if (index_state->lock_held)
+			tp_release_index_lock(index_state);
+		tp_compaction_unlock(index_rel);
+	}
+	PG_END_TRY();
+
+	return pass_ran;
+}
+
 PG_FUNCTION_INFO_V1(tp_compact_index);
 
 Datum
@@ -266,18 +294,7 @@ tp_compact_index(PG_FUNCTION_ARGS)
 	{
 		do
 		{
-			tp_compaction_lock(index_rel);
-			PG_TRY(_pass);
-			{
-				pass_ran = tp_compact_step(index_state, index_rel);
-			}
-			PG_FINALLY(_pass);
-			{
-				if (index_state->lock_held)
-					tp_release_index_lock(index_state);
-				tp_compaction_unlock(index_rel);
-			}
-			PG_END_TRY(_pass);
+			pass_ran = tp_compact_index_pass(index_state, index_rel);
 
 			CHECK_FOR_INTERRUPTS();
 		} while (pass_ran);

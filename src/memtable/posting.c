@@ -16,6 +16,7 @@
 #include <utils/memutils.h>
 
 #include "common/hashfn.h"
+#include "compat.h"
 #include "constants.h"
 #include "index/metapage.h"
 #include "index/registry.h"
@@ -254,8 +255,8 @@ tp_doclength_table_create(dsa_area *area)
 	params.entry_size		= sizeof(TpDocLengthEntry);
 	params.hash_function	= tp_doclength_hash_function;
 	params.compare_function = tp_doclength_compare_function;
-	params.copy_function	= tp_doclength_copy_function;
-	params.tranche_id		= tp_tranche_id(TP_DOCLENGTH_HASH_TRANCHE_ID);
+	TP_DSHASH_SET_COPY_FUNCTION(params, tp_doclength_copy_function);
+	params.tranche_id = tp_tranche_id(TP_DOCLENGTH_HASH_TRANCHE_ID);
 
 	return dshash_create(area, &params, area);
 }
@@ -272,8 +273,8 @@ tp_doclength_table_attach(dsa_area *area, dshash_table_handle handle)
 	params.entry_size		= sizeof(TpDocLengthEntry);
 	params.hash_function	= tp_doclength_hash_function;
 	params.compare_function = tp_doclength_compare_function;
-	params.copy_function	= tp_doclength_copy_function;
-	params.tranche_id		= tp_tranche_id(TP_DOCLENGTH_HASH_TRANCHE_ID);
+	TP_DSHASH_SET_COPY_FUNCTION(params, tp_doclength_copy_function);
+	params.tranche_id = tp_tranche_id(TP_DOCLENGTH_HASH_TRANCHE_ID);
 
 	return dshash_attach(area, &params, handle, area);
 }

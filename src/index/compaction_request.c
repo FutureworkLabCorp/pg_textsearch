@@ -36,6 +36,7 @@
 #include <utils/syscache.h>
 
 #include "access/am.h"
+#include "compat.h"
 #include "index/compaction_job.h"
 #include "index/compaction_request.h"
 

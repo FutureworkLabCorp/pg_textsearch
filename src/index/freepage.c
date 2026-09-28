@@ -16,6 +16,7 @@
 #include <storage/bufmgr.h>
 #include <storage/indexfsm.h>
 
+#include "compat.h"
 #include "constants.h"
 #include "index/freepage.h"
 
@@ -36,10 +37,16 @@ tp_log_page_reuse_conflict(
 	if (!RelationNeedsWAL(index) || !XLogStandbyInfoActive())
 		return;
 
+#if PG_VERSION_NUM >= 160000
 	xlrec.locator				  = index->rd_locator;
 	xlrec.block					  = block;
 	xlrec.snapshotConflictHorizon = horizon;
 	xlrec.isCatalogRel			  = false;
+#else
+	xlrec.node				   = index->rd_node;
+	xlrec.block				   = block;
+	xlrec.latestRemovedFullXid = horizon;
+#endif
 
 	XLogBeginInsert();
 	XLogRegisterData((char *)&xlrec, SizeOfBtreeReusePage);

@@ -8,6 +8,7 @@
 
 #include <access/genam.h>
 #include <access/heapam.h>
+#include <access/table.h>
 #include <access/transam.h>
 #include <catalog/index.h>
 #include <catalog/namespace.h>
@@ -81,6 +82,26 @@ tp_vacuum_reindex_hint_name(Relation index)
  * Convert a 32-bit xid (known to be in the allowable range when
  * nextFullXid was current) into a FullTransactionId.
  */
+/*
+ * The heap an index vacuum runs against.  PG16 hands it over as
+ * IndexVacuumInfo.heaprel; before that, open it from the index.  VACUUM,
+ * ANALYZE and a parallel vacuum worker all hold ShareUpdateExclusiveLock
+ * on the heap for the whole index pass, so NoLock suffices.  Pair each
+ * call with tp_vacuum_heap_close().
+ */
+#if PG_VERSION_NUM >= 160000
+#define tp_vacuum_heap_open(info)	  ((info)->heaprel)
+#define tp_vacuum_heap_close(heaprel) ((void)(heaprel))
+#else
+static Relation
+tp_vacuum_heap_open(IndexVacuumInfo *info)
+{
+	return table_open(info->index->rd_index->indrelid, NoLock);
+}
+
+#define tp_vacuum_heap_close(heaprel) table_close(heaprel, NoLock)
+#endif
+
 static inline FullTransactionId
 tp_full_xid_from_allowable_at(FullTransactionId nextFullXid, TransactionId xid)
 {
@@ -1072,6 +1093,7 @@ tp_bulkdelete_internal(
 				}
 				else
 				{
+					Relation	heaprel;
 					BlockNumber new_root;
 					uint64		old_tokens = 0;
 					uint64		source_tokens;
@@ -1081,9 +1103,10 @@ tp_bulkdelete_internal(
 					uint64		tokens_shrinkage = 0;
 					uint64		tokens_growth	 = 0;
 
+					heaprel	 = tp_vacuum_heap_open(info);
 					new_root = tp_vacuum_rebuild_segment(
 							info->index,
-							info->heaprel,
+							heaprel,
 							segments[i].root_block,
 							level,
 							callback,
@@ -1092,6 +1115,7 @@ tp_bulkdelete_internal(
 							&old_tokens,
 							&new_docs,
 							&new_tokens);
+					tp_vacuum_heap_close(heaprel);
 
 					if (segments[i].num_docs > new_docs)
 						docs_shrinkage = segments[i].num_docs - new_docs;
@@ -1186,6 +1210,7 @@ tp_vacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 {
 	TpSegmentGraphSnapshot *segment_snapshot;
 	TpLocalIndexState	   *index_state;
+	Relation				heaprel;
 	int						freed_pages;
 	volatile bool			maintenance_locked = false;
 	volatile bool			index_lock_held	   = false;
@@ -1257,8 +1282,8 @@ tp_vacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 		 * the captured fork size or page inspection.  No per-index lock is
 		 * held: concurrent inserts and spill publication remain available.
 		 */
-		freed_pages =
-				tp_reclaim_dead_memtable_pages(info->index, info->heaprel);
+		heaprel		= tp_vacuum_heap_open(info);
+		freed_pages = tp_reclaim_dead_memtable_pages(info->index, heaprel);
 		tp_compaction_unlock(info->index);
 		maintenance_locked = false;
 
@@ -1285,7 +1310,7 @@ tp_vacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 			uint32 drained = tp_tombstone_drain(
 					info->index,
 					index_state,
-					tp_reclaim_horizon(info->heaprel),
+					tp_reclaim_horizon(heaprel),
 					/* own_lock */ true);
 
 			if (drained != 0)
@@ -1294,6 +1319,7 @@ tp_vacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 				IndexFreeSpaceMapVacuum(info->index);
 			}
 		}
+		tp_vacuum_heap_close(heaprel);
 	}
 	PG_FINALLY();
 	{

@@ -6,7 +6,9 @@
 
 #include <postgres.h>
 
+#if PG_VERSION_NUM >= 170000
 #include <utils/injection_point.h>
+#endif
 
 #define TP_INJECTION_AFTER_SPILL_FINALIZE "pg-textsearch-after-spill-finalize"
 #define TP_INJECTION_SEGMENT_COUNT_LIMIT  "pg-textsearch-segment-count-limit"
@@ -51,8 +53,11 @@
 
 #if PG_VERSION_NUM >= 180000
 #define TP_INJECTION_POINT(name) INJECTION_POINT(name, NULL)
-#else
+#elif PG_VERSION_NUM >= 170000
 #define TP_INJECTION_POINT(name) INJECTION_POINT(name)
+#else
+/* Injection points arrived in PG17; older servers have none to fire. */
+#define TP_INJECTION_POINT(name) ((void)(name))
 #endif
 
 typedef struct TpInjectionCondition

@@ -24,7 +24,9 @@
 #include <replication/walreceiver.h>
 #include <storage/bufmgr.h>
 #include <storage/dsm.h>
+#if PG_VERSION_NUM >= 170000
 #include <storage/dsm_registry.h>
+#endif
 #include <storage/ipc.h>
 #include <storage/lmgr.h>
 #include <storage/lock.h>

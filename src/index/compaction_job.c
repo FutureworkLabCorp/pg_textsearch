@@ -45,10 +45,12 @@
 #include <utils/guc.h>
 #include <utils/lsyscache.h>
 #include <utils/rel.h>
+#include <utils/snapmgr.h>
 #include <utils/syscache.h>
 #include <utils/varlena.h>
 
 #include "access/am.h"
+#include "compat.h"
 #include "index/compaction_job.h"
 #include "index/compaction_request.h"
 

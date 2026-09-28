@@ -27,6 +27,7 @@
 #include <utils/rel.h>
 #include <utils/syscache.h>
 
+#include "compat.h"
 #include "index/resolve.h"
 
 /*

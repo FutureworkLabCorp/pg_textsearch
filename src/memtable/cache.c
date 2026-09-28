@@ -56,6 +56,7 @@
 #include <utils/memutils.h>
 #include <utils/rel.h>
 
+#include "compat.h"
 #include "constants.h"
 #include "index/metapage.h"
 #include "index/registry.h"

@@ -15,6 +15,7 @@
 #include <utils/syscache.h>
 
 #include "access/am.h"
+#include "compat.h"
 #include "planner/cost.h"
 #include "tsearch/ts_utils.h"
 
@@ -73,29 +74,35 @@ tp_handler(PG_FUNCTION_ARGS)
 	amroutine->amconsistentordering =
 			true; /* Support consistent ordering for ORDER BY */
 #endif
-	amroutine->amcanbackward	  = false; /* Cannot scan backwards */
-	amroutine->amcanunique		  = false; /* Cannot enforce uniqueness */
-	amroutine->amcanmulticol	  = false; /* Single column only */
-	amroutine->amoptionalkey	  = true;  /* Can scan without search key */
-	amroutine->amsearcharray	  = false; /* No array search support */
-	amroutine->amsearchnulls	  = false; /* Cannot search for NULLs */
-	amroutine->amstorage		  = false; /* No separate storage type */
-	amroutine->amclusterable	  = false; /* Cannot cluster on this index */
-	amroutine->ampredlocks		  = false; /* No predicate locking */
-	amroutine->amcanparallel	  = false; /* No parallel scan support yet */
+	amroutine->amcanbackward = false; /* Cannot scan backwards */
+	amroutine->amcanunique	 = false; /* Cannot enforce uniqueness */
+	amroutine->amcanmulticol = false; /* Single column only */
+	amroutine->amoptionalkey = true;  /* Can scan without search key */
+	amroutine->amsearcharray = false; /* No array search support */
+	amroutine->amsearchnulls = false; /* Cannot search for NULLs */
+	amroutine->amstorage	 = false; /* No separate storage type */
+	amroutine->amclusterable = false; /* Cannot cluster on this index */
+	amroutine->ampredlocks	 = false; /* No predicate locking */
+	amroutine->amcanparallel = false; /* No parallel scan support yet */
+#if PG_VERSION_NUM >= 170000
 	amroutine->amcanbuildparallel = true;
-	amroutine->amcaninclude		  = false; /* No INCLUDE columns */
+#endif
+	amroutine->amcaninclude = false; /* No INCLUDE columns */
 	amroutine->amusemaintenanceworkmem =
 			false; /* Vacuum does not use maintenance work mem */
-	amroutine->amsummarizing		   = false;
+#if PG_VERSION_NUM >= 160000
+	amroutine->amsummarizing = false;
+#endif
 	amroutine->amparallelvacuumoptions = VACUUM_OPTION_PARALLEL_BULKDEL;
 	amroutine->amkeytype			   = InvalidOid;
 
 	/* Interface functions */
-	amroutine->ambuild			= tp_build;
-	amroutine->ambuildempty		= tp_buildempty;
-	amroutine->aminsert			= tp_insert;
-	amroutine->aminsertcleanup	= NULL;
+	amroutine->ambuild		= tp_build;
+	amroutine->ambuildempty = tp_buildempty;
+	amroutine->aminsert		= tp_insert;
+#if PG_VERSION_NUM >= 170000
+	amroutine->aminsertcleanup = NULL;
+#endif
 	amroutine->ambulkdelete		= tp_bulkdelete;
 	amroutine->amvacuumcleanup	= tp_vacuumcleanup;
 	amroutine->amcanreturn		= NULL;
